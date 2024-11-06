@@ -21,7 +21,9 @@ BEGIN
         SUM(list_price * quantity * (1 - discount)) AS total_revenue,
         AVG(list_price * quantity * (1 - discount)) AS average_order_value
     FROM product_sales
-    GROUP BY customer_zip_code, category_name, year;
+    WHERE YEAR(STR_TO_DATE(shipped_date, '%Y-%m-%d')) IS NOT NULL
+    GROUP BY customer_zip_code, category_name, year
+    ORDER BY year, category_name ASC;
 END $$
 
 DELIMITER;

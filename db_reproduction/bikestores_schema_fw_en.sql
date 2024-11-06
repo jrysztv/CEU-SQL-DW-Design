@@ -75,7 +75,7 @@ DROP TABLE IF EXISTS `bikestores`.`geographical_sales_materialized` ;
 
 CREATE TABLE IF NOT EXISTS `bikestores`.`geographical_sales_materialized` (
   `customer_zip_code` VARCHAR(256) NULL DEFAULT NULL,
-  `category_name` VARCHAR(256) NULL DEFAULT NULL,
+  `category_name` VARCHAR(256) NOT NULL,
   `year` INT NULL DEFAULT NULL,
   `total_orders` BIGINT NOT NULL DEFAULT '0',
   `total_revenue` DOUBLE NULL DEFAULT NULL,
@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS `bikestores`.`orders` (
     FOREIGN KEY (`store_id`)
     REFERENCES `bikestores`.`stores` (`store_id`))
 ENGINE = InnoDB
-AUTO_INCREMENT = 1619
+AUTO_INCREMENT = 1621
 DEFAULT CHARACTER SET = utf8mb3;
 
 
@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS `bikestores`.`order_items` (
     FOREIGN KEY (`product_id`)
     REFERENCES `bikestores`.`products` (`product_id`))
 ENGINE = InnoDB
-AUTO_INCREMENT = 9
+AUTO_INCREMENT = 11
 DEFAULT CHARACTER SET = utf8mb3;
 
 
@@ -237,8 +237,8 @@ CREATE TABLE IF NOT EXISTS `bikestores`.`product_sales` (
   `customer_first_name` VARCHAR(256) NULL DEFAULT NULL,
   `customer_last_name` VARCHAR(256) NULL DEFAULT NULL,
   `customer_zip_code` VARCHAR(256) NULL DEFAULT NULL,
-  `category_name` VARCHAR(256) NULL DEFAULT NULL,
-  `brand_name` VARCHAR(256) NULL DEFAULT NULL)
+  `category_name` VARCHAR(256) NOT NULL,
+  `brand_name` VARCHAR(256) NOT NULL)
 ENGINE = InnoDB
 DEFAULT CHARACTER SET = utf8mb3;
 
@@ -265,6 +265,305 @@ ENGINE = InnoDB
 AUTO_INCREMENT = 4
 DEFAULT CHARACTER SET = utf8mb3;
 
+USE `bikestores` ;
+
+-- -----------------------------------------------------
+-- Placeholder table for view `bikestores`.`aggregated_sales_performance`
+-- -----------------------------------------------------
+CREATE TABLE IF NOT EXISTS `bikestores`.`aggregated_sales_performance` (`product_id` INT, `product_name` INT, `year` INT, `category_name` INT, `brand_name` INT, `customer_zip_code` INT, `model_year` INT, `total_orders` INT, `total_revenue` INT, `total_quantity` INT, `average_discount` INT, `average_order_value` INT);
+
+-- -----------------------------------------------------
+-- procedure create_geographical_sales_materialized
+-- -----------------------------------------------------
+
+USE `bikestores`;
+DROP procedure IF EXISTS `bikestores`.`create_geographical_sales_materialized`;
+
+DELIMITER $$
+USE `bikestores`$$
+CREATE DEFINER=`root`@`localhost` PROCEDURE `create_geographical_sales_materialized`()
+BEGIN
+    -- Drop the table if it already exists
+    DROP TABLE IF EXISTS geographical_sales_materialized;
+    -- Create the materialized table with aggregated data
+    CREATE TABLE geographical_sales_materialized AS
+    SELECT 
+        customer_zip_code,
+        category_name,
+        YEAR(STR_TO_DATE(shipped_date, '%Y-%m-%d')) AS year,
+        COUNT(DISTINCT order_id) AS total_orders,
+        SUM(list_price * quantity * (1 - discount)) AS total_revenue,
+        AVG(list_price * quantity * (1 - discount)) AS average_order_value
+    FROM product_sales
+    WHERE YEAR(STR_TO_DATE(shipped_date, '%Y-%m-%d')) IS NOT NULL
+    GROUP BY customer_zip_code, category_name, year
+    ORDER BY year, category_name ASC;
+END$$
+
+DELIMITER ;
+
+-- -----------------------------------------------------
+-- procedure create_product_sales
+-- -----------------------------------------------------
+
+USE `bikestores`;
+DROP procedure IF EXISTS `bikestores`.`create_product_sales`;
+
+DELIMITER $$
+USE `bikestores`$$
+CREATE DEFINER=`root`@`localhost` PROCEDURE `create_product_sales`()
+BEGIN
+    DROP TABLE IF EXISTS product_sales;
+    CREATE TABLE product_sales AS
+    SELECT
+        -- id columns
+        o.order_id,
+        p.product_id,
+        cu.customer_id,
+        ca.category_id,
+        -- order table
+        o.order_status,
+        o.required_date,
+        o.shipped_date,
+        -- order_items table
+        oi.list_price,
+        oi.quantity,
+        oi.discount,
+        -- products table
+        p.product_name,
+        p.model_year,
+        -- customers table
+        cu.first_name customer_first_name,
+        cu.last_name customer_last_name,
+        cu.zip_code customer_zip_code,
+        -- categories table
+        ca.category_name,
+        -- brands table
+        b.brand_name
+    FROM
+        orders o
+        JOIN order_items oi USING (order_id)
+        JOIN products p USING (product_id)
+        JOIN customers cu USING (customer_id)
+        JOIN categories ca USING (category_id)
+        JOIN brands b USING (brand_id)
+    ORDER BY o.required_date, cu.last_name;
+END$$
+
+DELIMITER ;
+
+-- -----------------------------------------------------
+-- procedure populate_database
+-- -----------------------------------------------------
+
+USE `bikestores`;
+DROP procedure IF EXISTS `bikestores`.`populate_database`;
+
+DELIMITER $$
+USE `bikestores`$$
+CREATE DEFINER=`root`@`localhost` PROCEDURE `populate_database`(
+    IN p_brand_name VARCHAR(256),
+    IN p_category_name VARCHAR(256),
+    IN p_customer_first_name VARCHAR(256),
+    IN p_customer_last_name VARCHAR(256),
+    IN p_phone VARCHAR(256),
+    IN p_email VARCHAR(256),
+    IN p_street VARCHAR(256),
+    IN p_city VARCHAR(256),
+    IN p_state VARCHAR(256),
+    IN p_zip_code VARCHAR(256),
+    IN p_product_name VARCHAR(256),
+    IN p_model_year VARCHAR(256),
+    IN p_list_price FLOAT,
+    IN p_order_status INT,
+    IN p_order_date VARCHAR(256),
+    IN p_required_date VARCHAR(256),
+    IN p_shipped_date VARCHAR(256),
+    IN p_quantity INT,
+    IN p_discount FLOAT
+)
+BEGIN
+    DECLARE brandId INT DEFAULT NULL;
+    DECLARE categoryId INT DEFAULT NULL;
+    DECLARE customerId INT DEFAULT NULL;
+    DECLARE productId INT DEFAULT NULL;
+    -- Normalize input parameters for comparison
+    SET @normalized_brand_name = LOWER(TRIM(p_brand_name));
+    SET @normalized_category_name = LOWER(TRIM(p_category_name));
+    SET @normalized_product_name = LOWER(TRIM(p_product_name));
+    SET @normalized_customer_first_name = LOWER(TRIM(p_customer_first_name));
+    SET @normalized_customer_last_name = LOWER(TRIM(p_customer_last_name));
+    SET @normalized_email = LOWER(TRIM(p_email));
+    -- Get or Insert Brand
+    SELECT brand_id INTO brandId
+    FROM brands
+    WHERE LOWER(TRIM(brand_name)) = @normalized_brand_name
+    LIMIT 1;
+    IF brandId IS NULL THEN
+        INSERT INTO brands (brand_name) VALUES (p_brand_name);
+        SET brandId = LAST_INSERT_ID();
+    END IF;
+    -- Get or Insert Category
+    SELECT category_id INTO categoryId
+    FROM categories
+    WHERE LOWER(TRIM(category_name)) = @normalized_category_name
+    LIMIT 1;
+    IF categoryId IS NULL THEN
+        INSERT INTO categories (category_name) VALUES (p_category_name);
+        SET categoryId = LAST_INSERT_ID();
+    END IF;
+    -- Get or Insert Customer
+    SELECT customer_id INTO customerId
+    FROM customers
+    WHERE LOWER(TRIM(first_name)) = @normalized_customer_first_name
+      AND LOWER(TRIM(last_name)) = @normalized_customer_last_name
+      AND LOWER(TRIM(email)) = @normalized_email
+    LIMIT 1;
+    IF customerId IS NULL THEN
+        INSERT INTO customers (
+            first_name,
+            last_name,
+            phone,
+            email,
+            street,
+            city,
+            state,
+            zip_code
+        ) VALUES (
+            p_customer_first_name,
+            p_customer_last_name,
+            p_phone,
+            p_email,
+            p_street,
+            p_city,
+            p_state,
+            p_zip_code
+        );
+        SET customerId = LAST_INSERT_ID();
+    END IF;
+    -- Get or Insert Product
+    SELECT product_id INTO productId
+    FROM products
+    WHERE LOWER(TRIM(product_name)) = @normalized_product_name
+      AND model_year = p_model_year
+    LIMIT 1;
+    IF productId IS NULL THEN
+        INSERT INTO products (
+            product_name,
+            model_year,
+            list_price,
+            category_id,
+            brand_id
+        ) VALUES (
+            p_product_name,
+            p_model_year,
+            p_list_price,
+            categoryId,
+            brandId
+        );
+        SET productId = LAST_INSERT_ID();
+    END IF;
+    -- Insert Order
+    INSERT INTO orders (
+        customer_id,
+        order_status,
+        order_date,
+        required_date,
+        shipped_date
+    ) VALUES (
+        customerId,
+        p_order_status,
+        p_order_date,
+        p_required_date,
+        p_shipped_date
+    );
+    -- Insert Order Item
+    INSERT INTO order_items (
+        order_id,
+        product_id,
+        quantity,
+        list_price,
+        discount
+    ) VALUES (
+        LAST_INSERT_ID(),
+        productId,
+        p_quantity,
+        p_list_price,
+        p_discount
+    );
+END$$
+
+DELIMITER ;
+
+-- -----------------------------------------------------
+-- View `bikestores`.`aggregated_sales_performance`
+-- -----------------------------------------------------
+DROP TABLE IF EXISTS `bikestores`.`aggregated_sales_performance`;
+DROP VIEW IF EXISTS `bikestores`.`aggregated_sales_performance` ;
+USE `bikestores`;
+CREATE  OR REPLACE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `bikestores`.`aggregated_sales_performance` AS select `bikestores`.`product_sales`.`product_id` AS `product_id`,`bikestores`.`product_sales`.`product_name` AS `product_name`,year(str_to_date(`bikestores`.`product_sales`.`required_date`,'%Y-%m-%d')) AS `year`,`bikestores`.`product_sales`.`category_name` AS `category_name`,`bikestores`.`product_sales`.`brand_name` AS `brand_name`,`bikestores`.`product_sales`.`customer_zip_code` AS `customer_zip_code`,`bikestores`.`product_sales`.`model_year` AS `model_year`,count(distinct `bikestores`.`product_sales`.`order_id`) AS `total_orders`,sum(((`bikestores`.`product_sales`.`list_price` * `bikestores`.`product_sales`.`quantity`) * (1 - `bikestores`.`product_sales`.`discount`))) AS `total_revenue`,sum(`bikestores`.`product_sales`.`quantity`) AS `total_quantity`,avg(`bikestores`.`product_sales`.`discount`) AS `average_discount`,avg(((`bikestores`.`product_sales`.`list_price` * `bikestores`.`product_sales`.`quantity`) * (1 - `bikestores`.`product_sales`.`discount`))) AS `average_order_value` from `bikestores`.`product_sales` group by `bikestores`.`product_sales`.`product_id`,`bikestores`.`product_sales`.`product_name`,`bikestores`.`product_sales`.`category_name`,`bikestores`.`product_sales`.`brand_name`,`bikestores`.`product_sales`.`customer_zip_code`,`bikestores`.`product_sales`.`model_year`,`year`;
+USE `bikestores`;
+
+DELIMITER $$
+
+USE `bikestores`$$
+DROP TRIGGER IF EXISTS `bikestores`.`after_order_item_insert` $$
+USE `bikestores`$$
+CREATE
+DEFINER=`root`@`localhost`
+TRIGGER `bikestores`.`after_order_item_insert`
+AFTER INSERT ON `bikestores`.`order_items`
+FOR EACH ROW
+BEGIN
+    INSERT INTO product_sales (
+        order_id,
+        product_id,
+        customer_id,
+        category_id,
+        order_status,
+        required_date,
+        shipped_date,
+        list_price,
+        quantity,
+        discount,
+        product_name,
+        model_year,
+        customer_first_name,
+        customer_last_name,
+        customer_zip_code,
+        category_name,
+        brand_name
+    )
+    SELECT 
+        o.order_id,
+        NEW.product_id,
+        o.customer_id,
+        p.category_id,
+        o.order_status,
+        o.required_date,
+        o.shipped_date,
+        NEW.list_price,
+        NEW.quantity,
+        NEW.discount,
+        p.product_name,
+        p.model_year,
+        cu.first_name,
+        cu.last_name,
+        cu.zip_code,
+        ca.category_name,
+        b.brand_name
+    FROM
+        orders o
+        JOIN products p ON NEW.product_id = p.product_id
+        JOIN customers cu ON o.customer_id = cu.customer_id
+        JOIN categories ca ON p.category_id = ca.category_id
+        JOIN brands b ON p.brand_id = b.brand_id
+    WHERE
+        o.order_id = NEW.order_id;
+END$$
+
+
+DELIMITER ;
 
 SET SQL_MODE=@OLD_SQL_MODE;
 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS;

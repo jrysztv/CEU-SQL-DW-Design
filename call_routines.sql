@@ -40,6 +40,8 @@ CALL create_product_sales ();
 CALL create_geographical_sales_materialized ();
 
 -- Aggregated Sales Performance View
+-- no way to get around creating the view, the dump does not recreate the view sadly.
+
 SELECT * FROM aggregated_sales_performance;
 
 -- Geographical Sales Performance Materialized View
