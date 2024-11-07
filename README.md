@@ -128,7 +128,7 @@ Description of source database tables: [Kaggle: Bike Store Database](https://www
 ---
 
 ### Database Schema Diagram
-![Database Schema](images\bikestores_db_schema_diagram.png)
+![Database Schema](images/bikestores_db_schema_diagram.png)
 - `geographical_sales_materialized` and `product_sales` are also visible as disjointed tables
 - `aggregated_sales_performance` view is also mentioned.
 
