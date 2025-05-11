@@ -1,3 +1,7 @@
+Submission for Data Engineering 1 
+@Central European University, 2024 Autumn
+**Professor**: Laszlo Sallo
+
 # Project Documentation
 
 ## Table of Contents
